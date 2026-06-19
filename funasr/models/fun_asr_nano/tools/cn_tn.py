@@ -9,6 +9,23 @@
 #   - python 3.X
 # notes: python 2.X WILL fail or produce misleading results
 
+"""
+中文文本归一化工具 (Chinese Text Normalization)。
+
+将语音识别结果中的非标准词汇（NSW, Non-Standard Word）转换为标准中文表达。
+支持以下类型的归一化：
+    - 日期（如 "2024年3月15日" -> "二零二四年三月十五日"）
+    - 金额（如 "100元" -> "一百元"）
+    - 电话号码（如 "13812345678" -> "一三八一二三四五六七八"）
+    - 分数（如 "3/4" -> "四分之三"）
+    - 百分数（如 "95%" -> "百分之九十五"）
+    - 数字+量词（如 "3个" -> "三个"）
+    - 纯数字（如 "12345" -> "一二三四五"）
+    - 中文数字与阿拉伯数字互转
+
+来源: https://github.com/Joee1995/chn_text_norm.git
+"""
+
 import argparse
 import csv
 import os
@@ -400,19 +417,18 @@ IN_VALID_CHARS = {c: True for c in VALID_CHARS}
 #                                    basic class
 # ================================================================================ #
 class ChineseChar(object):
-    """
-    中文字符
-    每个字符对应简体和繁体,
-    e.g. 简体 = '负', 繁体 = '負'
-    转换时可转换为简体或繁体
+    """中文字符基类。
+
+    每个字符对应简体和繁体两种形式，转换时可选择输出简体或繁体。
+    例如：简体='负', 繁体='負'
     """
 
     def __init__(self, simplified, traditional):
-        """Initialize ChineseChar.
-        
+        """初始化中文字符。
+
             Args:
-                simplified: TODO.
-                traditional: TODO.
+                simplified (str): 简体中文字符。
+                traditional (str): 繁体中文字符。
             """
         self.simplified = simplified
         self.traditional = traditional
@@ -428,21 +444,21 @@ class ChineseChar(object):
 
 
 class ChineseNumberUnit(ChineseChar):
-    """
-    中文数字/数位字符
-    每个字符除繁简体外还有一个额外的大写字符
-    e.g. '陆' 和 '陸'
+    """中文数字数位字符类。
+
+    表示中文数字系统中的数位单位（如十、百、千、万、亿等）。
+    除简繁体外，还有大写形式（如陆/陸）。
     """
 
     def __init__(self, power, simplified, traditional, big_s, big_t):
-        """Initialize ChineseNumberUnit.
-        
+        """初始化数位字符。
+
             Args:
-                power: TODO.
-                simplified: TODO.
-                traditional: TODO.
-                big_s: TODO.
-                big_t: TODO.
+                power (int): 数位的幂次（如"十"=1, "百"=2, "千"=3, "万"=4）。
+                simplified (str): 简体数位字符。
+                traditional (str): 繁体数位字符。
+                big_s (str): 大写简体形式。
+                big_t (str): 大写繁体形式。
             """
         super(ChineseNumberUnit, self).__init__(simplified, traditional)
         self.power = power
@@ -455,13 +471,16 @@ class ChineseNumberUnit(ChineseChar):
 
     @classmethod
     def create(cls, index, value, numbering_type=NUMBERING_TYPES[1], small_unit=False):
-        """Create.
-        
+        """工厂方法：根据索引和数值创建数位字符实例。
+
             Args:
-                index: TODO.
-                value: TODO.
-                numbering_type: TODO.
-                small_unit: TODO.
+                index (int): 在数位列表中的索引。
+                value (tuple): (简体, 繁体) 的元组。
+                numbering_type (str): 数字系统类型 ('low', 'mid', 'high')。
+                small_unit (bool): 是否为小数位（十/百/千/万）。
+
+            Returns:
+                ChineseNumberUnit: 创建的数位字符实例。
             """
         if small_unit:
             return ChineseNumberUnit(
@@ -500,21 +519,23 @@ class ChineseNumberUnit(ChineseChar):
 
 
 class ChineseNumberDigit(ChineseChar):
-    """
-    中文数字字符
+    """中文数字字符类。
+
+    表示 0-9 的中文数字，支持简繁体和大写形式。
+    例如：一/壹, 二/贰, 零/〇/幺 等。
     """
 
     def __init__(self, value, simplified, traditional, big_s, big_t, alt_s=None, alt_t=None):
-        """Initialize ChineseNumberDigit.
-        
+        """初始化数字字符。
+
             Args:
-                value: TODO.
-                simplified: TODO.
-                traditional: TODO.
-                big_s: TODO.
-                big_t: TODO.
-                alt_s: TODO.
-                alt_t: TODO.
+                value (int): 数字的数值（0-9）。
+                simplified (str): 简体形式。
+                traditional (str): 繁体形式。
+                big_s (str): 大写简体形式。
+                big_t (str): 大写繁体形式。
+                alt_s (str, optional): 替代简体形式（如"零"→"〇"）。
+                alt_t (str, optional): 替代繁体形式。
             """
         super(ChineseNumberDigit, self).__init__(simplified, traditional)
         self.value = value
@@ -529,28 +550,32 @@ class ChineseNumberDigit(ChineseChar):
 
     @classmethod
     def create(cls, i, v):
-        """Create.
-        
+        """工厂方法：从索引和四元组创建数字字符。
+
             Args:
-                i: TODO.
-                v: TODO.
+                i (int): 数字值（0-9）。
+                v (tuple): (简体, 繁体, 大写简体, 大写繁体) 的四元组。
+
+            Returns:
+                ChineseNumberDigit: 创建的数字字符实例。
             """
         return ChineseNumberDigit(i, v[0], v[1], v[2], v[3])
 
 
 class ChineseMath(ChineseChar):
-    """
-    中文数位字符
+    """中文数学符号字符类。
+
+    表示中文数字系统中的数学符号，如正号、负号、小数点等。
     """
 
     def __init__(self, simplified, traditional, symbol, expression=None):
-        """Initialize ChineseMath.
-        
+        """初始化数学符号字符。
+
             Args:
-                simplified: TODO.
-                traditional: TODO.
-                symbol: TODO.
-                expression: TODO.
+                simplified (str): 简体符号（如"正"、"负"、"点"）。
+                traditional (str): 繁体符号。
+                symbol (str): 对应的数学符号（如"+"、"-"、"."）。
+                expression (callable, optional): 表达式求值函数。
             """
         super(ChineseMath, self).__init__(simplified, traditional)
         self.symbol = symbol
@@ -571,20 +596,21 @@ class NumberSystem(object):
 
 
 class MathSymbol(object):
-    """
-    用于中文数字系统的数学符号 (繁/简体), e.g.
-    positive = ['正', '正']
-    negative = ['负', '負']
-    point = ['点', '點']
+    """中文数学符号类，包含正号、负号和小数点的简繁体表示。
+
+    例如：
+        positive = ['正', '正']
+        negative = ['负', '負']
+        point = ['点', '點']
     """
 
     def __init__(self, positive, negative, point):
-        """Initialize MathSymbol.
-        
+        """初始化数学符号集合。
+
             Args:
-                positive: TODO.
-                negative: TODO.
-                point: TODO.
+                positive (ChineseMath): 正号符号对象。
+                negative (ChineseMath): 负号符号对象。
+                point (ChineseMath): 小数点符号对象。
             """
         self.positive = positive
         self.negative = negative
@@ -660,19 +686,20 @@ def create_system(numbering_type=NUMBERING_TYPES[1]):
 
 
 def chn2num(chinese_string, numbering_type=NUMBERING_TYPES[1]):
-    """Chn2num.
-    
-        Args:
-            chinese_string: TODO.
-            numbering_type: TODO.
-        """
+    """将中文数字字符串转换为阿拉伯数字字符串。
+
+    支持整数和小数（如"三百二十五点五"→"325.5"），
+    支持简繁体和大写数字。
+
+    Args:
+        chinese_string (str): 中文数字字符串。
+        numbering_type (str): 数字系统类型 ('low', 'mid', 'high')，默认 'mid'。
+
+    Returns:
+        str: 阿拉伯数字字符串。
+    """
     def get_symbol(char, system):
-        """Get symbol.
-        
-            Args:
-                char: TODO.
-                system: TODO.
-            """
+        """查找单个中文字符对应的数字系统符号（单位/数字/数学符号）。"""
         for u in system.units:
             if char in [u.traditional, u.simplified, u.big_s, u.big_t]:
                 return u
@@ -691,12 +718,7 @@ def chn2num(chinese_string, numbering_type=NUMBERING_TYPES[1]):
                 return m
 
     def string2symbols(chinese_string, system):
-        """String2symbols.
-        
-            Args:
-                chinese_string: TODO.
-                system: TODO.
-            """
+        """将中文数字字符串拆分为整数部分和小数部分的符号列表。"""
         int_string, dec_string = chinese_string, ""
         for p in [system.math.point.simplified, system.math.point.traditional]:
             if p in chinese_string:
@@ -706,8 +728,11 @@ def chn2num(chinese_string, numbering_type=NUMBERING_TYPES[1]):
 
     def correct_symbols(integer_symbols, system):
         """
-        一百八 to 一百八十
-        一亿一千三百万 to 一亿 一千万 三百万
+        修正中文数字符号序列中的隐含单位。
+
+        处理两种情况：
+        1. "一百八" -> "一百八十"（末尾缺少个位单位）
+        2. "一亿一千三百万" -> "一亿 一千万 三百万"（展开复合单位）
         """
 
         if integer_symbols and isinstance(integer_symbols[0], CNU):
@@ -744,9 +769,10 @@ def chn2num(chinese_string, numbering_type=NUMBERING_TYPES[1]):
 
     def compute_value(integer_symbols):
         """
-        Compute the value.
-        When current unit is larger than previous unit, current unit * all previous units will be used as all previous units.
-        e.g. '两千万' = 2000 * 10000 not 2000 + 10000
+        计算整数符号序列的数值。
+
+        当当前单位大于前一个单位时，当前单位会乘以之前所有的值。
+        例如 "两千万" = 2000 * 10000，而不是 2000 + 10000。
         """
         value = [0]
         last_power = 0
@@ -783,25 +809,33 @@ def num2chn(
     use_zeros=True,
     use_units=True,
 ):
-    """Num2chn.
-    
-        Args:
-            number_string: TODO.
-            numbering_type: TODO.
-            big: TODO.
-            traditional: TODO.
-            alt_zero: TODO.
-            alt_one: TODO.
-            alt_two: TODO.
-            use_zeros: TODO.
-            use_units: TODO.
-        """
+    """将阿拉伯数字字符串转换为中文数字字符串。
+
+    支持整数和小数，可选择简繁体、大写、是否使用"零"和数位单位等。
+
+    Args:
+        number_string (str): 阿拉伯数字字符串，如 "325" 或 "325.5"。
+        numbering_type (str): 数字系统类型 ('low', 'mid', 'high')。
+        big (bool): 是否使用大写形式（如"叁佰贰拾伍"），默认 False。
+        traditional (bool): 是否使用繁体，默认 False。
+        alt_zero (bool): 是否使用替代零符号"〇"，默认 False。
+        alt_one (bool): 是否使用替代一符号"幺"，默认 False。
+        alt_two (bool): 是否在适当位置将"二"替换为"两"，默认 True。
+        use_zeros (bool): 是否在数字间补零，默认 True。
+        use_units (bool): 是否使用数位单位（十/百/千/万），默认 True。
+
+    Returns:
+        str: 中文数字字符串。
+    """
     def get_value(value_string, use_zeros=True):
-        """Get value.
-        
+        """递归地将数字字符串转换为中文数字符号序列。
+
             Args:
-                value_string: TODO.
-                use_zeros: TODO.
+                value_string (str): 数字字符串。
+                use_zeros (bool): 是否在数字间补零。
+
+            Returns:
+                list: 中文数字符号列表。
             """
         striped_string = value_string.lstrip("0")
 
@@ -910,40 +944,52 @@ def num2chn(
 #                          different types of rewriters
 # ================================================================================ #
 class Cardinal:
-    """
-    CARDINAL类
+    """基数词转换类。
+
+    在阿拉伯数字和中文数字之间进行双向转换。
+    例如："三百二十五" ↔ "325"
     """
 
     def __init__(self, cardinal=None, chntext=None):
-        """Initialize Cardinal.
-        
+        """初始化基数词对象。
+
             Args:
-                cardinal: TODO.
-                chntext: TODO.
+                cardinal (str): 阿拉伯数字字符串，如 "325"。
+                chntext (str): 中文数字字符串，如 "三百二十五"。
             """
         self.cardinal = cardinal
         self.chntext = chntext
 
     def chntext2cardinal(self):
-        """Chntext2cardinal."""
+        """将中文基数词转换为阿拉伯数字。
+
+        Returns:
+            str: 阿拉伯数字字符串。
+        """
         return chn2num(self.chntext)
 
     def cardinal2chntext(self):
-        """Cardinal2chntext."""
+        """将阿拉伯数字转换为中文基数词。
+
+        Returns:
+            str: 中文数字字符串。
+        """
         return num2chn(self.cardinal)
 
 
 class Digit:
-    """
-    DIGIT类
+    """数字编号转换类。
+
+    将多位数字（如编号、序列号）逐位转换为中文数字，不使用数位单位。
+    例如："12345" → "一二三四五"
     """
 
     def __init__(self, digit=None, chntext=None):
-        """Initialize Digit.
-        
+        """初始化数字编号对象。
+
             Args:
-                digit: TODO.
-                chntext: TODO.
+                digit (str): 阿拉伯数字字符串。
+                chntext (str): 中文数字字符串。
             """
         self.digit = digit
         self.chntext = chntext
@@ -952,22 +998,28 @@ class Digit:
     #     return chn2num(self.chntext)
 
     def digit2chntext(self):
-        """Digit2chntext."""
+        """将阿拉伯数字逐位转换为中文数字（不使用数位单位）。
+
+        Returns:
+            str: 中文数字字符串，如 "一二三四五"。
+        """
         return num2chn(self.digit, alt_two=False, use_units=False)
 
 
 class TelePhone:
-    """
-    TELEPHONE类
+    """电话号码转换类。
+
+    将电话号码（手机号/固话）转换为中文读法。
+    例如："13812345678" → "一三八一二三四五六七八"
     """
 
     def __init__(self, telephone=None, raw_chntext=None, chntext=None):
-        """Initialize TelePhone.
-        
+        """初始化电话号码对象。
+
             Args:
-                telephone: TODO.
-                raw_chntext: TODO.
-                chntext: TODO.
+                telephone (str): 电话号码字符串。
+                raw_chntext (str): 原始中文文本（可能包含分隔符）。
+                chntext (str): 最终中文文本。
             """
         self.telephone = telephone
         self.raw_chntext = raw_chntext
@@ -981,11 +1033,15 @@ class TelePhone:
     #     return self.telephone
 
     def telephone2chntext(self, fixed=False):
-        """Telephone2chntext.
-        
-            Args:
-                fixed: TODO.
-            """
+        """将电话号码转换为中文读法。
+
+        Args:
+            fixed (bool): 是否为固定电话。True 时按"区话-号码"格式解析，
+                         False 时按国际号码格式解析。
+
+        Returns:
+            str: 电话号码的中文读法。
+        """
         if fixed:
             sil_parts = self.telephone.split("-")
             self.raw_chntext = "<SIL>".join([num2chn(part, alt_two=False, use_units=False) for part in sil_parts])
@@ -998,27 +1054,37 @@ class TelePhone:
 
 
 class Fraction:
-    """
-    FRACTION类
+    """分数转换类。
+
+    在分数表示和中文读法之间进行双向转换。
+    例如："3/4" ↔ "四分之三"
     """
 
     def __init__(self, fraction=None, chntext=None):
-        """Initialize Fraction.
-        
+        """初始化分数对象。
+
             Args:
-                fraction: TODO.
-                chntext: TODO.
+                fraction (str): 分数字符串，如 "3/4"。
+                chntext (str): 中文分数字符串，如 "四分之三"。
             """
         self.fraction = fraction
         self.chntext = chntext
 
     def chntext2fraction(self):
-        """Chntext2fraction."""
+        """将中文分数转换为阿拉伯分数。
+
+        Returns:
+            str: 阿拉伯分数字符串，如 "3/4"。
+        """
         denominator, numerator = self.chntext.split("分之")
         return chn2num(numerator) + "/" + chn2num(denominator)
 
     def fraction2chntext(self):
-        """Fraction2chntext."""
+        """将阿拉伯分数转换为中文读法。
+
+        Returns:
+            str: 中文分数字符串，如 "四分之三"。
+        """
         numerator, denominator = self.fraction.split("/")
         return num2chn(denominator) + "分之" + num2chn(numerator)
 
@@ -1032,8 +1098,8 @@ class Date:
         """Initialize Date.
         
             Args:
-                date: TODO.
-                chntext: TODO.
+                date (str): 日期字符串，如 "2024年3月15日"。
+                chntext (str): 中文文本形式的日期。
             """
         self.date = date
         self.chntext = chntext
@@ -1063,7 +1129,14 @@ class Date:
     #     return self.date
 
     def date2chntext(self):
-        """Date2chntext."""
+        """将日期字符串转换为中文读法。
+
+        解析"年月日"格式，分别将年份用逐位转换、
+        月日用基数词转换后拼接。
+
+        Returns:
+            str: 日期的中文读法。
+        """
         date = self.date
         try:
             year, other = date.strip().split("年", 1)
@@ -1097,8 +1170,8 @@ class Money:
         """Initialize Money.
         
             Args:
-                money: TODO.
-                chntext: TODO.
+                money (str): 金额字符串，如 "100元"、"3.5美元"。
+                chntext (str): 中文文本形式的金额。
             """
         self.money = money
         self.chntext = chntext
@@ -1107,7 +1180,13 @@ class Money:
     #     return self.money
 
     def money2chntext(self):
-        """Money2chntext."""
+        """将金额字符串转换为中文读法。
+
+        提取金额中的数字部分，用基数词转换后替换回原字符串。
+
+        Returns:
+            str: 金额的中文读法。
+        """
         money = self.money
         pattern = re.compile(r"(\d+(\.\d+)?)")
         matchers = pattern.findall(money)
@@ -1127,27 +1206,48 @@ class Percentage:
         """Initialize Percentage.
         
             Args:
-                percentage: TODO.
-                chntext: TODO.
+                percentage (str): 百分数字符串，如 "50%"。
+                chntext (str): 中文文本形式的百分数，如 "百分之五十"。
             """
         self.percentage = percentage
         self.chntext = chntext
 
     def chntext2percentage(self):
-        """Chntext2percentage."""
+        """将中文百分数转换为阿拉伯数字百分数。
+
+        Returns:
+            str: 阿拉伯数字百分数，如 "50%"。
+        """
         return chn2num(self.chntext.strip().strip("百分之")) + "%"
 
     def percentage2chntext(self):
-        """Percentage2chntext."""
+        """将阿拉伯数字百分数转换为中文读法。
+
+        Returns:
+            str: 中文百分数，如 "百分之五十"。
+        """
         return "百分之" + num2chn(self.percentage.strip().strip("%"))
 
 
 def normalize_nsw(raw_text):
-    """Normalize nsw.
-    
-        Args:
-            raw_text: TODO.
-        """
+    """对文本中的非标准词汇（NSW）进行归一化。
+
+    按照优先级依次处理以下类型的 NSW：
+    1. 日期（年月日）
+    2. 金额（人民币、美元等 + 元角分）
+    3. 电话号码（手机号 + 固话）
+    4. 分数（如 3/4）
+    5. 百分数（如 95%）
+    6. 数字+量词（如 3个、5次）
+    7. 长数字编号（4位及以上）
+    8. 剩余纯数字
+
+    Args:
+        raw_text (str): 原始文本，可能包含阿拉伯数字和特殊符号。
+
+    Returns:
+        str: 归一化后的文本，所有 NSW 已转换为中文表达。
+    """
     text = "^" + raw_text + "$"
 
     # 规范化日期
@@ -1243,9 +1343,22 @@ def normalize_nsw(raw_text):
 
 
 def remove_erhua(text):
-    """
-    去除儿化音词中的儿:
-    他女儿在那边儿 -> 他女儿在那边
+    """去除儿化音词中的 "儿" 字，但保留白名单中的 "儿"。
+
+    白名单包含不能去除 "儿" 的词语（如 "女儿"、"儿童"、"儿子" 等）。
+    对于不在白名单中的 "儿"，直接移除。
+
+    Examples:
+        >>> remove_erhua("他女儿在那边儿")
+        '他女儿在那边'
+        >>> remove_erhua("儿童节")
+        '儿童节'
+
+    Args:
+        text (str): 输入文本。
+
+    Returns:
+        str: 去除儿化音后的文本。
     """
 
     new_str = ""
@@ -1253,15 +1366,18 @@ def remove_erhua(text):
         a = re.search("儿", text).span()
         remove_er_flag = 0
 
+        # 检查白名单：如果 "儿" 在白名单词语中，则保留
         if ER_WHITELIST_PATTERN.search(text):
             b = ER_WHITELIST_PATTERN.search(text).span()
             if b[0] <= a[0]:
-                remove_er_flag = 1
+                remove_er_flag = 1  # 白名单匹配，保留 "儿"
 
         if remove_er_flag == 0:
+            # 非白名单，移除 "儿"
             new_str = new_str + text[0 : a[0]]
             text = text[a[1] :]
         else:
+            # 白名单匹配，保留整个白名单词语
             new_str = new_str + text[0 : b[1]]
             text = text[b[1] :]
 
@@ -1270,15 +1386,21 @@ def remove_erhua(text):
 
 
 def remove_space(text):
-    """Remove space.
-    
-        Args:
-            text: Text tensor or string input.
-        """
+    """去除中文文本中的空格，但保留英文单词之间的空格。
+
+    判断规则：如果相邻两个 token 都以英文字符开头/结尾，则保留它们之间的空格。
+
+    Args:
+        text (str): 输入文本（已用空格分词）。
+
+    Returns:
+        str: 处理后的文本。
+    """
     tokens = text.split()
     new = []
     for k, t in enumerate(tokens):
         if k != 0:
+            # 前一个 token 的最后一个字符和当前 token 的第一个字符都是英文，保留空格
             if IN_EN_CHARS.get(tokens[k - 1][-1]) and IN_EN_CHARS.get(t[0]):
                 new.append(" ")
         new.append(t)
@@ -1286,6 +1408,22 @@ def remove_space(text):
 
 
 class TextNorm:
+    """中文文本归一化工具类。
+
+    支持多种文本清洗和归一化操作，可通过构造函数参数自由组合。
+    作为 callable 使用，对输入文本依次执行已启用的归一化操作。
+
+    处理流水线（按顺序）：
+    1. 全角转半角（可选）
+    2. 大小写转换（可选）
+    3. 去除填充词如"呃"、"啊"（可选）
+    4. 去除儿化音（可选）
+    5. NSW 归一化（数字→中文等）
+    6. 去除标点符号
+    7. 合法字符检查（可选）
+    8. 去除空格（可选）
+    """
+
     def __init__(
         self,
         to_banjiao: bool = False,
@@ -1296,17 +1434,17 @@ class TextNorm:
         check_chars: bool = False,
         remove_space: bool = False,
     ):
-        """Initialize TextNorm.
-        
-            Args:
-                to_banjiao: TODO.
-                to_upper: TODO.
-                to_lower: TODO.
-                remove_fillers: TODO.
-                remove_erhua: TODO.
-                check_chars: TODO.
-                remove_space: TODO.
-            """
+        """初始化文本归一化器。
+
+        Args:
+            to_banjiao (bool): 是否将全角字符转换为半角，默认 False。
+            to_upper (bool): 是否转换为大写，默认 False。
+            to_lower (bool): 是否转换为小写，默认 False。
+            remove_fillers (bool): 是否去除填充词（"呃"、"啊"），默认 False。
+            remove_erhua (bool): 是否去除儿化音，保留白名单中的"儿"字，默认 False。
+            check_chars (bool): 是否检查字符合法性，非法字符则跳过该句，默认 False。
+            remove_space (bool): 是否去除空格（英文间空格保留），默认 False。
+        """
         self.to_banjiao = to_banjiao
         self.to_upper = to_upper
         self.to_lower = to_lower
@@ -1316,11 +1454,14 @@ class TextNorm:
         self.remove_space = remove_space
 
     def __call__(self, text):
-        """Internal: call  .
-        
-            Args:
-                text: Text tensor or string input.
-            """
+        """对输入文本执行完整的归一化流水线。
+
+        Args:
+            text (str): 待归一化的原始文本。
+
+        Returns:
+            str: 归一化后的文本。如果启用了 check_chars 且包含非法字符，返回空字符串。
+        """
         if self.to_banjiao:
             text = text.translate(QJ2BJ_TRANSFORM)
 

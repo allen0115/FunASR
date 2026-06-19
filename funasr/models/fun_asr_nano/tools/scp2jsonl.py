@@ -1,3 +1,29 @@
+"""SCP 转 JSONL 数据转换工具。
+
+将 SCP 格式的音频路径文件和转录文本文件转换为 Fun-ASR-Nano 训练所需的
+ChatML JSONL 格式。支持本地文件和 HTTP URL 音频路径，使用多线程并行处理。
+
+输入格式：
+    scp_file:       utterance_id  /path/to/audio.wav
+    transcript_file: utterance_id  转录文本
+
+输出格式（JSONL）：
+    {"messages": [...], "speech_length": N, "text_length": M}
+"""
+
+"""SCP + Transcript 转 JSONL 训练数据工具。
+
+将 Kaldi 格式的 scp 文件（音频路径列表）和 transcript 文件（对应文本）
+转换为 Fun-ASR-Nano 训练所需的 JSONL 格式。
+
+输入格式:
+    scp_file:       utt_id  audio_path
+    transcript_file: utt_id  text
+
+输出格式 (JSONL):
+    {"messages": [...], "speech_length": int, "text_length": int}
+"""
+
 import hydra
 import json
 import os
@@ -14,21 +40,32 @@ from omegaconf import DictConfig, OmegaConf, ListConfig
 
 
 class LineProcessor:
+    """单行数据处理器，负责将一对 scp + transcript 行转换为 JSONL 格式。
+
+    线程安全：通过 threading.Lock 保护共享的 tokenizer。
+    """
+
     def __init__(self, tokenizer):
-        """Initialize LineProcessor.
-        
-            Args:
-                tokenizer: Tokenizer instance for text encoding/decoding.
-            """
+        """初始化处理器。
+
+        Args:
+            tokenizer: 用于计算文本 token 长度的分词器实例。
+        """
         self.tokenizer = tokenizer
         self.lock = threading.Lock()
 
     def process_line(self, line_pair: Tuple[str, str]) -> Optional[Dict]:
-        """Process line.
-        
-            Args:
-                line_pair: TODO.
-            """
+        """处理一对 scp + transcript 行，转换为 JSONL 训练数据格式。
+
+        校验 utt_id 一致性，加载音频获取时长，构建 ChatML 格式的消息列表。
+
+        Args:
+            line_pair (tuple): (scp_line, transcript_line)，每行格式为 "utt_id content"。
+
+        Returns:
+            dict: 成功时返回 {"success": data_dict, "utt": utt_id}，
+                  失败时返回 {"error": error_message}，跳过空行时返回 None。
+        """
         line1, line2 = line_pair
 
         line1, line2 = line1.strip(), line2.strip()
@@ -42,10 +79,12 @@ class LineProcessor:
         utt1, utt2 = parts1[0], parts2[0]
         wav_path, text = parts1[1], parts2[1]
 
+        # 校验两个文件中的 utt_id 是否一致
         if utt1 != utt2:
             return {"error": f"UTT mismatch: {utt1} vs {utt2}"}
 
         try:
+            # 加载音频并获取时长（支持 HTTP URL 和本地路径）
             if wav_path.startswith("http"):
                 response = urlopen(wav_path)
                 if response.status != 200:
@@ -57,6 +96,8 @@ class LineProcessor:
                     return {"error": f"WAV not found: {wav_path}"}
                 duration = sf.info(wav_path).duration
 
+            # 构建 ChatML 格式的训练数据
+            # speech_length 计算公式：(duration_ms - 25) // 10 + 1，对应前端特征帧数
             data = {
                 "messages": [
                     {"role": "system", "content": "You are a helpful assistant."},
@@ -77,17 +118,16 @@ class LineProcessor:
 
 @hydra.main(config_name=None, version_base=None)
 def main_hydra(cfg: DictConfig):
-    """Main hydra.
-    
-        Args:
-            cfg: Configuration overrides.
-        """
+    """Hydra 入口函数：并行读取 scp + transcript 文件，转换为 JSONL 训练数据。
+
+    使用线程池并行处理每一行数据，处理完成后统计成功/失败数量并输出摘要。
+
+    Args:
+        cfg (DictConfig): Hydra 配置，需包含 scp_file, transcript_file, jsonl_file，
+                          可选 max_workers（默认为 CPU 核心数）。
+    """
     def to_plain_list(cfg_item):
-        """To plain list.
-        
-            Args:
-                cfg_item: TODO.
-            """
+        """递归地将 OmegaConf 配置对象转换为纯 Python 类型。"""
         if isinstance(cfg_item, ListConfig):
             return OmegaConf.to_container(cfg_item, resolve=True)
         elif isinstance(cfg_item, DictConfig):

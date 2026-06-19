@@ -24,12 +24,12 @@ class CTC(torch.nn.Module):
         """Initialize CTC.
         
             Args:
-                odim: TODO.
-                encoder_output_size: Size/dimension parameter.
-                dropout_rate: TODO.
-                reduce: TODO.
-                blank_id: TODO.
-                **kwargs: Additional keyword arguments.
+                odim (int): 输出维度（词表大小）。
+                encoder_output_size (int): 编码器输出维度。
+                dropout_rate (float): Dropout 比率（0.0 ~ 1.0）。
+                reduce (bool): 是否将 CTC 损失归约为标量。
+                blank_id (int): blank token 的 ID。
+                **kwargs: 其他关键字参数。
             """
         super().__init__()
         eprojs = encoder_output_size
