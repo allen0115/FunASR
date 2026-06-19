@@ -24,6 +24,8 @@ fun_asr_nano/
 ├── inference_vllm.py           # vLLM 推理引擎
 ├── inference_vllm_pipeline.py  # VAD + ASR + 说话人分离管道
 ├── inference_vllm_streaming.py # 流式推理引擎
+├── speaker_verifier.py          # 声纹验证模块（跨录音环境说话人识别）
+├── speaker_verifier_demo.py     # 声纹验证演示脚本
 └── tools/
     ├── utils.py                # 工具函数（音频加载、强制对齐）
     ├── cn_tn.py                # 中文文本正则化
