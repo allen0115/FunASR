@@ -1,3 +1,14 @@
+"""Whisper 解码模块。
+
+实现 Whisper 模型的解码逻辑，包括：
+- DecodingOptions: 解码配置（温度、beam size、语言等）
+- DecodingResult: 解码结果
+- DecodingTask: 解码任务的完整流程
+- TokenDecoder: token 解码策略（贪心/束搜索）
+- LogitFilter: logits 过滤器（抑制特殊 token、时间戳规则等）
+- Inference: 推理接口（支持 KV 缓存）
+"""
+
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Dict, Iterable, List, Optional, Sequence, Tuple, Union
 
@@ -174,13 +185,15 @@ class Inference:
 
 
 class PyTorchInference(Inference):
+    """基于 PyTorch 的推理实现，支持 KV 缓存以加速自回归生成。"""
+
     def __init__(self, model: "Whisper", initial_token_length: int):
-        """Initialize PyTorchInference.
-        
-            Args:
-                model: Model instance or model name.
-                initial_token_length: TODO.
-            """
+        """初始化 PyTorch 推理引擎。
+
+        Args:
+            model (Whisper): Whisper 模型实例。
+            initial_token_length (int): 初始 token 序列长度（用于判断是否只取最后一个 token）。
+        """
         self.model: "Whisper" = model
         self.initial_token_length = initial_token_length
         self.kv_cache = {}
@@ -333,13 +346,18 @@ class TokenDecoder:
 
 
 class GreedyDecoder(TokenDecoder):
+    """贪心解码器：每步选择概率最高的 token。
+
+    当 temperature=0 时使用 argmax，否则从分布中采样。
+    """
+
     def __init__(self, temperature: float, eot: int):
-        """Initialize GreedyDecoder.
-        
-            Args:
-                temperature: TODO.
-                eot: TODO.
-            """
+        """初始化贪心解码器。
+
+        Args:
+            temperature (float): 采样温度，0 表示贪心解码。
+            eot (int): 结束 token 的 ID。
+        """
         self.temperature = temperature
         self.eot = eot
 
@@ -379,6 +397,11 @@ class GreedyDecoder(TokenDecoder):
 
 
 class BeamSearchDecoder(TokenDecoder):
+    """束搜索解码器：维护多个候选序列，选择累积概率最高的。
+
+    支持 patience 参数控制搜索的耐心程度。
+    """
+
     def __init__(
         self,
         beam_size: int,
@@ -386,14 +409,14 @@ class BeamSearchDecoder(TokenDecoder):
         inference: Inference,
         patience: Optional[float] = None,
     ):
-        """Initialize BeamSearchDecoder.
-        
-            Args:
-                beam_size: Size/dimension parameter.
-                eot: TODO.
-                inference: TODO.
-                patience: TODO.
-            """
+        """初始化束搜索解码器。
+
+        Args:
+            beam_size (int): 束宽度。
+            eot (int): 结束 token 的 ID。
+            inference (Inference): 推理引擎。
+            patience (float, optional): 搜索耐心度，默认 1.0。
+        """
         self.beam_size = beam_size
         self.eot = eot
         self.inference = inference
@@ -513,13 +536,15 @@ class LogitFilter:
 
 
 class SuppressBlank(LogitFilter):
+    """在序列开始时抑制空白 token 和 EOT token 的生成。"""
+
     def __init__(self, tokenizer: Tokenizer, sample_begin: int):
-        """Initialize SuppressBlank.
-        
-            Args:
-                tokenizer: Tokenizer instance for text encoding/decoding.
-                sample_begin: TODO.
-            """
+        """初始化空白抑制过滤器。
+
+        Args:
+            tokenizer (Tokenizer): 分词器实例。
+            sample_begin (int): 采样开始位置（跳过 prompt token）。
+        """
         self.tokenizer = tokenizer
         self.sample_begin = sample_begin
 
@@ -535,12 +560,14 @@ class SuppressBlank(LogitFilter):
 
 
 class SuppressTokens(LogitFilter):
+    """抑制指定 token 的生成（将其 logits 设为 -inf）。"""
+
     def __init__(self, suppress_tokens: Sequence[int]):
-        """Initialize SuppressTokens.
-        
-            Args:
-                suppress_tokens: TODO.
-            """
+        """初始化 token 抑制过滤器。
+
+        Args:
+            suppress_tokens (Sequence[int]): 需要抑制的 token ID 列表。
+        """
         self.suppress_tokens = list(suppress_tokens)
 
     def apply(self, logits: Tensor, tokens: Tensor):
@@ -554,16 +581,22 @@ class SuppressTokens(LogitFilter):
 
 
 class GainEventToken(LogitFilter):
+    """音频事件 token 增益过滤器。
+
+    增强音频事件标签（如 Speech、BGM、Applause、Laughter）的生成概率，
+    并通过计数规则控制开闭标签的平衡。
+    """
+
     def __init__(
         self, bg_tokens: Sequence[int], ed_tokens: Sequence[int], gain_values: Sequence[float]
     ):
-        """Initialize GainEventToken.
-        
-            Args:
-                bg_tokens: TODO.
-                ed_tokens: TODO.
-                gain_values: TODO.
-            """
+        """初始化音频事件增益过滤器。
+
+        Args:
+            bg_tokens (Sequence[int]): 开始标签 token ID 列表。
+            ed_tokens (Sequence[int]): 结束标签 token ID 列表。
+            gain_values (Sequence[float]): 每个事件类型的增益值。
+        """
         self.bg_tokens = list(bg_tokens)
         self.ed_tokens = list(ed_tokens)
         self.gain_value = [np.log(max(ga, 1e-9)) for ga in gain_values]
@@ -589,16 +622,22 @@ class GainEventToken(LogitFilter):
 
 
 class ThresholdEmoToken(LogitFilter):
+    """情感 token 阈值过滤器。
+
+    当情感 token 的概率低于阈值时，将其替换为未知情感 token，
+    避免低置信度的情感误判。
+    """
+
     def __init__(
         self, unk_tokens: Sequence[int], emo_tokens: Sequence[int], th_values: Sequence[float]
     ):
-        """Initialize ThresholdEmoToken.
-        
-            Args:
-                unk_tokens: TODO.
-                emo_tokens: TODO.
-                th_values: TODO.
-            """
+        """初始化情感阈值过滤器。
+
+        Args:
+            unk_tokens (Sequence[int]): 未知情感 token ID。
+            emo_tokens (Sequence[int]): 目标情感 token ID 列表。
+            th_values (Sequence[float]): 每个情感的概率阈值。
+        """
         self.unk_token = list(unk_tokens)[0]
         self.emo_tokens = list(emo_tokens)
         self.th_values = list(th_values)
@@ -628,19 +667,27 @@ class ThresholdEmoToken(LogitFilter):
 
 
 class ApplyTimestampRules(LogitFilter):
+    """时间戳规则过滤器。
+
+    强制时间戳 token 的生成规则：
+    - 时间戳必须成对出现（除了 EOT 前）
+    - 时间戳不能递减
+    - 每个段必须有非零长度
+    """
+
     def __init__(
         self,
         tokenizer: Tokenizer,
         sample_begin: int,
         max_initial_timestamp_index: Optional[int],
     ):
-        """Initialize ApplyTimestampRules.
-        
-            Args:
-                tokenizer: Tokenizer instance for text encoding/decoding.
-                sample_begin: TODO.
-                max_initial_timestamp_index: TODO.
-            """
+        """初始化时间戳规则过滤器。
+
+        Args:
+            tokenizer (Tokenizer): 分词器实例。
+            sample_begin (int): 采样开始位置。
+            max_initial_timestamp_index (int, optional): 初始时间戳的最大索引。
+        """
         self.tokenizer = tokenizer
         self.sample_begin = sample_begin
         self.max_initial_timestamp_index = max_initial_timestamp_index
@@ -698,18 +745,27 @@ class ApplyTimestampRules(LogitFilter):
 
 
 class DecodingTask:
+    """解码任务：协调推理引擎、序列排序器、token 解码器和 logits 过滤器。
+
+    完整的解码流程：
+    1. 音频特征提取（编码器）
+    2. 语言检测（可选）
+    3. 自回归 token 生成（带 logits 过滤）
+    4. 序列排序和选择
+    """
+
     inference: Inference
     sequence_ranker: SequenceRanker
     decoder: TokenDecoder
     logit_filters: List[LogitFilter]
 
     def __init__(self, model: "Whisper", options: DecodingOptions):
-        """Initialize DecodingTask.
-        
-            Args:
-                model: Model instance or model name.
-                options: TODO.
-            """
+        """初始化解码任务。
+
+        Args:
+            model (Whisper): Whisper 模型实例。
+            options (DecodingOptions): 解码配置。
+        """
         self.model = model
 
         language = options.language or "en"

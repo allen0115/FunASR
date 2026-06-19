@@ -23,27 +23,28 @@ from .utils.ctc_alignment import ctc_forced_align
 
 
 class SinusoidalPositionEncoder(torch.nn.Module):
-    """ """
+    """正弦位置编码器。
+
+    使用正弦和余弦函数生成位置编码，为序列中的每个位置生成唯一的向量表示。
+    与 Transformer 原论文中的位置编码方式一致。
+    """
 
     def __init__(self, d_model=80, dropout_rate=0.1):
-        """Initialize SinusoidalPositionEncoder.
-        
-            Args:
-                d_model: D Model instance.
-                dropout_rate: TODO.
-            """
         super().__init__()
 
     def encode(
         self, positions: torch.Tensor = None, depth: int = None, dtype: torch.dtype = torch.float32
     ):
-        """Encode.
-        
-            Args:
-                positions: TODO.
-                depth: TODO.
-                dtype: TODO.
-            """
+        """将位置索引编码为正弦位置向量。
+
+        Args:
+            positions (torch.Tensor): 位置索引张量，形状为 (batch_size, seq_len)。
+            depth (int): 编码维度（必须为偶数）。
+            dtype (torch.dtype): 输出数据类型。
+
+        Returns:
+            torch.Tensor: 位置编码，形状为 (batch_size, seq_len, depth)。
+        """
         batch_size = positions.size(0)
         positions = positions.type(dtype)
         device = positions.device
@@ -61,11 +62,14 @@ class SinusoidalPositionEncoder(torch.nn.Module):
         return encoding.type(dtype)
 
     def forward(self, x):
-        """Forward pass for training.
-        
-            Args:
-                x: TODO.
-            """
+        """将正弦位置编码加到输入张量上。
+
+        Args:
+            x (torch.Tensor): 输入张量，形状为 (batch_size, timesteps, input_dim)。
+
+        Returns:
+            torch.Tensor: 添加位置编码后的张量，形状与输入相同。
+        """
         batch_size, timesteps, input_dim = x.size()
         positions = torch.arange(1, timesteps + 1, device=x.device)[None, :]
         position_encoding = self.encode(positions, input_dim, x.dtype).to(x.device)
@@ -145,13 +149,19 @@ class MultiHeadedAttentionSANM(nn.Module):
         self.pad_fn = nn.ConstantPad1d((left_padding, right_padding), 0.0)
 
     def forward_fsmn(self, inputs, mask, mask_shfit_chunk=None):
-        """Forward fsmn.
-        
-            Args:
-                inputs: TODO.
-                mask: TODO.
-                mask_shfit_chunk: TODO.
-            """
+        """前向 FSMN（Feedforward Sequential Memory Network）模块。
+
+        FSMN 是一种轻量级的序列建模模块，通过 1D 卷积捕获局部上下文信息。
+        残差连接确保梯度流畅传播。
+
+        Args:
+            inputs (torch.Tensor): 输入张量，形状为 (batch, time, dim)。
+            mask (torch.Tensor, optional): 输入掩码。
+            mask_shfit_chunk (torch.Tensor, optional): 流式推理时的块移位掩码。
+
+        Returns:
+            torch.Tensor: FSMN 输出，形状与输入相同。
+        """
         b, t, d = inputs.size()
         if mask is not None:
             mask = torch.reshape(mask, (b, -1, 1))
@@ -237,18 +247,18 @@ class MultiHeadedAttentionSANM(nn.Module):
         return self.linear_out(x)  # (batch, time1, d_model)
 
     def forward(self, x, mask, mask_shfit_chunk=None, mask_att_chunk_encoder=None):
-        """Compute scaled dot product attention.
+        """SANM 多头注意力前向传播。
+
+        融合标准多头注意力和 FSMN 模块的输出，实现全局和局部信息的互补。
 
         Args:
-            query (torch.Tensor): Query tensor (#batch, time1, size).
-            key (torch.Tensor): Key tensor (#batch, time2, size).
-            value (torch.Tensor): Value tensor (#batch, time2, size).
-            mask (torch.Tensor): Mask tensor (#batch, 1, time2) or
-                (#batch, time1, time2).
+            x (torch.Tensor): 输入张量，形状为 (batch, time, size)。
+            mask (torch.Tensor): 输入掩码。
+            mask_shfit_chunk (torch.Tensor, optional): 流式推理时的块移位掩码。
+            mask_att_chunk_encoder (torch.Tensor, optional): 编码器注意力掩码。
 
         Returns:
-            torch.Tensor: Output tensor (#batch, time1, d_model).
-
+            torch.Tensor: 注意力输出 + FSMN 输出，形状为 (batch, time, d_model)。
         """
         q_h, k_h, v_h, v = self.forward_qkv(x)
         fsmn_memory = self.forward_fsmn(v, mask, mask_shfit_chunk)
@@ -258,18 +268,18 @@ class MultiHeadedAttentionSANM(nn.Module):
         return att_outs + fsmn_memory
 
     def forward_chunk(self, x, cache=None, chunk_size=None, look_back=0):
-        """Compute scaled dot product attention.
+        """流式推理时的分块前向传播。
+
+        支持增量式推理，通过 KV 缓存复用历史计算结果，提高流式推理效率。
 
         Args:
-            query (torch.Tensor): Query tensor (#batch, time1, size).
-            key (torch.Tensor): Key tensor (#batch, time2, size).
-            value (torch.Tensor): Value tensor (#batch, time2, size).
-            mask (torch.Tensor): Mask tensor (#batch, 1, time2) or
-                (#batch, time1, time2).
+            x (torch.Tensor): 当前块的输入张量。
+            cache (dict, optional): KV 缓存字典，包含历史的 key 和 value。
+            chunk_size (tuple, optional): 分块大小配置。
+            look_back (int): 回看块数，-1 表示全局回看。
 
         Returns:
-            torch.Tensor: Output tensor (#batch, time1, d_model).
-
+            tuple: (输出张量, 更新后的 KV 缓存)。
         """
         q_h, k_h, v_h, v = self.forward_qkv(x)
         if chunk_size is not None and look_back > 0 or look_back == -1:
@@ -298,21 +308,16 @@ class MultiHeadedAttentionSANM(nn.Module):
 
 
 class LayerNorm(nn.LayerNorm):
+    """改进的层归一化，将输入转为 float32 进行计算后再转回原始类型。
+
+    这确保了归一化的数值稳定性，同时保持与输入相同的数据类型（如 fp16）。
+    """
+
     def __init__(self, *args, **kwargs):
-        """Initialize LayerNorm.
-        
-            Args:
-                *args: Variable positional arguments.
-                **kwargs: Additional keyword arguments.
-            """
         super().__init__(*args, **kwargs)
 
     def forward(self, input):
-        """Forward pass for training.
-        
-            Args:
-                input: Input audio/text data.
-            """
+        """前向传播：float32 归一化后转回原始类型。"""
         output = F.layer_norm(
             input.float(),
             self.normalized_shape,
@@ -324,14 +329,19 @@ class LayerNorm(nn.LayerNorm):
 
 
 def sequence_mask(lengths, maxlen=None, dtype=torch.float32, device=None):
-    """Sequence mask.
-    
-        Args:
-            lengths: TODO.
-            maxlen: TODO.
-            dtype: TODO.
-            device: Target device ("cuda:0", "cpu", etc.).
-        """
+    """生成序列掩码。
+
+    根据每个序列的有效长度生成布尔掩码，有效位置为 True，填充位置为 False。
+
+    Args:
+        lengths (torch.Tensor): 每个序列的有效长度，形状为 (batch,)。
+        maxlen (int, optional): 最大序列长度，默认为 lengths 的最大值。
+        dtype (torch.dtype): 输出掩码的数据类型。
+        device (torch.device, optional): 输出掩码的设备。
+
+    Returns:
+        torch.Tensor: 序列掩码，形状为 (batch, maxlen)。
+    """
     if maxlen is None:
         maxlen = lengths.max()
     row_vector = torch.arange(0, maxlen, 1).to(lengths.device)
@@ -343,6 +353,16 @@ def sequence_mask(lengths, maxlen=None, dtype=torch.float32, device=None):
 
 
 class EncoderLayerSANM(nn.Module):
+    """SANM 编码器层。
+
+    每个编码器层包含：
+    1. SANM 自注意力（多头注意力 + FSMN）
+    2. 前馈网络（PositionwiseFeedForward）
+    3. 残差连接和层归一化
+
+    支持 Pre-Norm 和 Post-Norm 两种归一化方式，以及随机深度正则化。
+    """
+
     def __init__(
         self,
         in_size,
@@ -371,17 +391,17 @@ class EncoderLayerSANM(nn.Module):
         self.dropout_rate = dropout_rate
 
     def forward(self, x, mask, cache=None, mask_shfit_chunk=None, mask_att_chunk_encoder=None):
-        """Compute encoded features.
+        """编码器层前向传播。
 
         Args:
-            x_input (torch.Tensor): Input tensor (#batch, time, size).
-            mask (torch.Tensor): Mask tensor for the input (#batch, time).
-            cache (torch.Tensor): Cache tensor of the input (#batch, time - 1, size).
+            x (torch.Tensor): 输入张量，形状为 (batch, time, size)。
+            mask (torch.Tensor): 输入掩码。
+            cache (torch.Tensor, optional): 缓存张量（用于流式推理）。
+            mask_shfit_chunk (torch.Tensor, optional): 块移位掩码。
+            mask_att_chunk_encoder (torch.Tensor, optional): 编码器注意力掩码。
 
         Returns:
-            torch.Tensor: Output tensor (#batch, time, size).
-            torch.Tensor: Mask tensor (#batch, time).
-
+            tuple: (输出张量, 掩码, 缓存, 块移位掩码, 编码器注意力掩码)。
         """
         skip_layer = False
         # with stochastic depth, residual connection `x + f(x)` becomes
@@ -449,17 +469,16 @@ class EncoderLayerSANM(nn.Module):
         return x, mask, cache, mask_shfit_chunk, mask_att_chunk_encoder
 
     def forward_chunk(self, x, cache=None, chunk_size=None, look_back=0):
-        """Compute encoded features.
+        """流式推理时的分块前向传播。
 
         Args:
-            x_input (torch.Tensor): Input tensor (#batch, time, size).
-            mask (torch.Tensor): Mask tensor for the input (#batch, time).
-            cache (torch.Tensor): Cache tensor of the input (#batch, time - 1, size).
+            x (torch.Tensor): 当前块的输入张量。
+            cache (dict, optional): KV 缓存。
+            chunk_size (tuple, optional): 分块大小配置。
+            look_back (int): 回看块数。
 
         Returns:
-            torch.Tensor: Output tensor (#batch, time, size).
-            torch.Tensor: Mask tensor (#batch, time).
-
+            tuple: (输出张量, 更新后的 KV 缓存)。
         """
 
         residual = x
@@ -487,10 +506,16 @@ class EncoderLayerSANM(nn.Module):
 
 @tables.register("encoder_classes", "SenseVoiceEncoderSmall")
 class SenseVoiceEncoderSmall(nn.Module):
-    """
-    Author: Speech Lab of DAMO Academy, Alibaba Group
-    SCAMA: Streaming chunk-aware multihead attention for online end-to-end speech recognition
+    """SenseVoice 小型编码器，基于 SANM (Streaming Chunk-Aware Multihead Attention) 架构。
+
+    采用两阶段编码结构：
+    - encoders0 + encoders: 主编码器，负责将音频特征编码为高层表示
+    - tp_encoders: 任务感知编码器，进一步处理以适应下游任务
+
+    参考论文: SCAMA: Streaming chunk-aware multihead attention for online end-to-end speech recognition
     https://arxiv.org/abs/2006.01713
+
+    Author: Speech Lab of DAMO Academy, Alibaba Group
     """
 
     def __init__(
@@ -517,31 +542,22 @@ class SenseVoiceEncoderSmall(nn.Module):
         selfattention_layer_type: str = "sanm",
         **kwargs,
     ):
-        """Initialize SenseVoiceEncoderSmall.
-        
-            Args:
-                input_size: Size/dimension parameter.
-                output_size: Size/dimension parameter.
-                attention_heads: TODO.
-                linear_units: TODO.
-                num_blocks: TODO.
-                tp_blocks: TODO.
-                dropout_rate: TODO.
-                positional_dropout_rate: TODO.
-                attention_dropout_rate: TODO.
-                stochastic_depth_rate: TODO.
-                input_layer: TODO.
-                pos_enc_class: TODO.
-                normalize_before: TODO.
-                concat_after: TODO.
-                positionwise_layer_type: TODO.
-                positionwise_conv_kernel_size: Size/dimension parameter.
-                padding_idx: TODO.
-                kernel_size: Size/dimension parameter.
-                sanm_shfit: TODO.
-                selfattention_layer_type: TODO.
-                **kwargs: Additional keyword arguments.
-            """
+        """初始化 SenseVoice 编码器。
+
+        Args:
+            input_size (int): 输入特征维度（如 FBank 特征维度）。
+            output_size (int): 编码器输出维度。
+            attention_heads (int): 多头注意力的头数。
+            linear_units (int): 前馈网络的隐藏层维度。
+            num_blocks (int): 主编码器层数。
+            tp_blocks (int): 任务感知编码器层数。
+            dropout_rate (float): Dropout 比率。
+            positional_dropout_rate (float): 位置编码的 Dropout 比率。
+            attention_dropout_rate (float): 注意力权重的 Dropout 比率。
+            stochastic_depth_rate (float): 随机深度比率（训练时随机跳过层）。
+            kernel_size (int): FSMN 的卷积核大小。
+            sanm_shfit (int): SANM 的偏移量。
+        """
         super().__init__()
         self._output_size = output_size
 
@@ -657,7 +673,16 @@ class SenseVoiceEncoderSmall(nn.Module):
 
 @tables.register("model_classes", "SenseVoiceSmall")
 class SenseVoiceSmall(nn.Module):
-    """CTC-attention hybrid Encoder-Decoder model"""
+    """SenseVoice 小型语音理解模型。
+
+    基于 CTC 的端到端语音识别模型，支持：
+    - 多语言语音识别（中文、英文、粤语、日语、韩语等）
+    - 语音情感识别（开心、悲伤、愤怒、中性）
+    - 音频事件检测（语音、背景音乐、掌声、笑声）
+    - 字符级时间戳
+
+    模型结构：音频特征 -> 语言/情感/事件查询嵌入拼接 -> 编码器 -> CTC 解码
+    """
 
     def __init__(
         self,
@@ -678,25 +703,24 @@ class SenseVoiceSmall(nn.Module):
         **kwargs,
     ):
 
-        """Initialize SenseVoiceSmall.
-        
-            Args:
-                specaug: TODO.
-                specaug_conf: Configuration dict for specaug.
-                normalize: TODO.
-                normalize_conf: Configuration dict for normalize.
-                encoder: TODO.
-                encoder_conf: Configuration dict for encoder.
-                ctc_conf: Configuration dict for ctc.
-                input_size: Size/dimension parameter.
-                vocab_size: Size/dimension parameter.
-                ignore_id: TODO.
-                blank_id: TODO.
-                sos: TODO.
-                eos: TODO.
-                length_normalized_loss: TODO.
-                **kwargs: Additional keyword arguments.
-            """
+        """初始化 SenseVoice 模型。
+
+        Args:
+            specaug (str, optional): SpecAugment 数据增强类名。
+            specaug_conf (dict, optional): SpecAugment 配置。
+            normalize (str, optional): 特征归一化类名（如 CMVN）。
+            normalize_conf (dict, optional): 归一化配置。
+            encoder (str, optional): 编码器类名。
+            encoder_conf (dict, optional): 编码器配置。
+            ctc_conf (dict, optional): CTC 解码器配置。
+            input_size (int): 输入特征维度（默认 80 维 FBank）。
+            vocab_size (int): 词表大小。
+            ignore_id (int): 计算损失时忽略的标签 ID。
+            blank_id (int): CTC blank token 的 ID。
+            sos (int): 序列起始 token ID。
+            eos (int): 序列结束 token ID。
+            length_normalized_loss (bool): 是否对损失进行长度归一化。
+        """
         super().__init__()
 
         if specaug is not None:
@@ -821,11 +845,24 @@ class SenseVoiceSmall(nn.Module):
         text: torch.Tensor,
         **kwargs,
     ):
-        """Frontend + Encoder. Note that this method is used by asr_inference.py
+        """音频编码：前端特征增强 + 语言/风格/事件查询嵌入拼接 + 编码器。
+
+        处理流程：
+        1. 可选的 SpecAugment 数据增强
+        2. 可选的特征归一化（如 CMVN）
+        3. 从 text 中提取语言 ID 和文本归一化风格，生成查询嵌入
+        4. 拼接 [语言查询, 事件查询, 风格查询, 音频特征] 作为编码器输入
+        5. 通过 SANM 编码器编码
+
         Args:
-                speech: (Batch, Length, ...)
-                speech_lengths: (Batch, )
-                ind: int
+            speech (torch.Tensor): 音频特征，形状为 (batch, time, feat_dim)。
+            speech_lengths (torch.Tensor): 每个样本的有效长度。
+            text (torch.Tensor): 包含语言 ID 和风格信息的 token 序列。
+
+        Returns:
+            tuple: (encoder_out, encoder_out_lens)
+                - encoder_out: 编码器输出，形状为 (batch, time+4, output_size)。
+                - encoder_out_lens: 输出的有效长度。
         """
 
         # Data augmentation
@@ -875,15 +912,19 @@ class SenseVoiceSmall(nn.Module):
         ys_pad: torch.Tensor,
         ys_pad_lens: torch.Tensor,
     ):
-        # Calc CTC loss
-        """Internal: calc ctc loss.
-        
-            Args:
-                encoder_out: Encoder output tensor.
-                encoder_out_lens: Encoder output lengths.
-                ys_pad: TODO.
-                ys_pad_lens: Lengths of ys_pad.
-            """
+        """计算 CTC 损失和 CER（字符错误率）。
+
+        Args:
+            encoder_out (torch.Tensor): 编码器输出。
+            encoder_out_lens (torch.Tensor): 编码器输出的有效长度。
+            ys_pad (torch.Tensor): 填充后的目标序列。
+            ys_pad_lens (torch.Tensor): 目标序列的有效长度。
+
+        Returns:
+            tuple: (loss_ctc, cer_ctc)
+                - loss_ctc: CTC 损失值。
+                - cer_ctc: 字符错误率（仅在评估时计算）。
+        """
         loss_ctc = self.ctc(encoder_out, encoder_out_lens, ys_pad, ys_pad_lens)
 
         # Calc CER using CTC
@@ -898,12 +939,19 @@ class SenseVoiceSmall(nn.Module):
         encoder_out: torch.Tensor,
         ys_pad: torch.Tensor,
     ):
-        """Internal: calc rich ce loss.
-        
-            Args:
-                encoder_out: Encoder output tensor.
-                ys_pad: TODO.
-            """
+        """计算富标签交叉熵损失（用于情感/事件/语言等辅助任务）。
+
+        对编码器输出的前 4 个位置（语言、事件、情感、风格）计算交叉熵损失。
+
+        Args:
+            encoder_out (torch.Tensor): 编码器输出，形状为 (batch, 4, output_size)。
+            ys_pad (torch.Tensor): 富标签序列（包含语言、事件、情感、风格 token）。
+
+        Returns:
+            tuple: (loss_rich, acc_rich)
+                - loss_rich: 交叉熵损失值。
+                - acc_rich: 预测准确率。
+        """
         decoder_out = self.ctc.ctc_lo(encoder_out)
         # 2. Compute attention loss
         loss_rich = self.criterion_att(decoder_out, ys_pad.contiguous())
@@ -1080,11 +1128,22 @@ class SenseVoiceSmall(nn.Module):
         return results, meta_data
 
     def post(self, timestamp):
-        """Post.
-        
-            Args:
-                timestamp: TODO.
-            """
+        """后处理时间戳：合并子词为完整单词，并将秒转为毫秒。
+
+        处理逻辑：
+        1. 跳过纯空格 token（"▁"）
+        2. 以 "▁" 开头的 token 作为新单词的开始
+        3. 连续的英文字符合并为一个单词
+        4. 其他情况（中文等）每个 token 独立成词
+
+        Args:
+            timestamp (list): 原始时间戳列表，每个元素为 [token, start_sec, end_sec]。
+
+        Returns:
+            tuple: (timestamp_new, words_new)
+                - timestamp_new: 时间戳列表，每个元素为 [start_ms, end_ms]。
+                - words_new: 对应的单词/字符列表。
+        """
         timestamp_new = []
         words_new = []
         prev_word = None

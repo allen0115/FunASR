@@ -9,12 +9,17 @@ from funasr.utils.torch_function import sequence_mask
 
 
 def export_rebuild_model(model, **kwargs):
-    """Export rebuild model.
-    
-        Args:
-            model: Model instance or model name.
-            **kwargs: Additional keyword arguments.
-        """
+    """重建模型用于 ONNX 导出。
+
+    将模型的 forward 方法替换为导出友好的版本，并绑定导出相关的元数据方法。
+
+    Args:
+        model: 原始 SenseVoiceSmall 模型实例。
+        **kwargs: 导出配置，需包含 device 和 max_seq_len。
+
+    Returns:
+        重建后的模型，支持 ONNX 导出。
+    """
     model.device = kwargs.get("device")
     model.make_pad_mask = sequence_mask(kwargs["max_seq_len"], flip=False)
     model.forward = types.MethodType(export_forward, model)
@@ -33,17 +38,24 @@ def export_forward(
     textnorm: torch.Tensor,
     **kwargs,
 ):
-    # speech = speech.to(device="cuda")
-    # speech_lengths = speech_lengths.to(device="cuda")
-    """Export forward.
-    
-        Args:
-            speech: Speech audio tensor, shape (batch, time).
-            speech_lengths: Length of each speech sample.
-            language: Language identifier.
-            textnorm: TODO.
-            **kwargs: Additional keyword arguments.
-        """
+    """ONNX 导出专用的前向传播。
+
+    与标准 forward 的区别：
+    - 直接接收语言和文本归一化 token ID（而非从 text 中解析）
+    - 不计算损失，直接输出 CTC logits
+    - 不使用 SpecAugment 和归一化
+
+    Args:
+        speech (torch.Tensor): 音频特征，形状为 (batch, time, feat_dim)。
+        speech_lengths (torch.Tensor): 每个样本的有效长度。
+        language (torch.Tensor): 语言 token ID。
+        textnorm (torch.Tensor): 文本归一化风格 token ID。
+
+    Returns:
+        tuple: (ctc_logits, encoder_out_lens)
+            - ctc_logits: CTC 输出 logits，形状为 (batch, time, vocab_size)。
+            - encoder_out_lens: 编码器输出的有效长度。
+    """
     language_query = self.embed(language.to(speech.device)).unsqueeze(1)
     textnorm_query = self.embed(textnorm.to(speech.device)).unsqueeze(1)
     

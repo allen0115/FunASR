@@ -1,3 +1,15 @@
+"""Whisper 模型架构定义。
+
+本模块定义了 Whisper 语音识别模型的核心组件：
+- AudioEncoder: 音频编码器，将 Mel 频谱图编码为音频特征
+- TextDecoder: 文本解码器，基于音频特征自回归生成文本
+- Whisper: 完整的编码器-解码器模型
+- MultiHeadAttention: 标准多头注意力（支持 KV 缓存）
+- MultiHeadAttentionSdpa: 基于 PyTorch SDPA 的高效多头注意力
+
+本模块是 OpenAI Whisper 的修改版本，适配了 SenseVoice 模型的需求。
+"""
+
 import base64
 import gzip
 from dataclasses import dataclass
@@ -15,6 +27,23 @@ from .transcribe import transcribe as transcribe_function
 
 @dataclass
 class ModelDimensions:
+    """Whisper 模型维度配置。
+
+    定义了编码器和解码器的所有维度参数。
+
+    Attributes:
+        n_mels (int): Mel 频谱图的维度数。
+        n_audio_ctx (int): 音频上下文长度（时间步数）。
+        n_audio_state (int): 音频特征维度。
+        n_audio_head (int): 音频编码器的注意力头数。
+        n_audio_layer (int): 音频编码器的层数。
+        n_vocab (int): 词表大小。
+        n_text_ctx (int): 文本上下文长度。
+        n_text_state (int): 文本特征维度。
+        n_text_head (int): 文本解码器的注意力头数。
+        n_text_layer (int): 文本解码器的层数。
+        att_type (str): 注意力类型，"default" 或 "sdpa"。
+    """
     n_mels: int
     n_audio_ctx: int
     n_audio_state: int
@@ -97,13 +126,18 @@ def sinusoids(length, channels, max_timescale=10000):
 
 
 class MultiHeadAttention(nn.Module):
+    """标准多头注意力模块。
+
+    支持自注意力和交叉注意力，以及 KV 缓存以加速自回归生成。
+    """
+
     def __init__(self, n_state: int, n_head: int):
-        """Initialize MultiHeadAttention.
-        
-            Args:
-                n_state: TODO.
-                n_head: TODO.
-            """
+        """初始化多头注意力。
+
+        Args:
+            n_state (int): 特征维度。
+            n_head (int): 注意力头数。
+        """
         super().__init__()
         self.n_head = n_head
         self.query = Linear(n_state, n_state)
@@ -119,15 +153,17 @@ class MultiHeadAttention(nn.Module):
         kv_cache: Optional[dict] = None,
         **kwargs,
     ):
-        """Forward pass for training.
-        
-            Args:
-                x: TODO.
-                xa: TODO.
-                mask: TODO.
-                kv_cache: TODO.
-                **kwargs: Additional keyword arguments.
-            """
+        """多头注意力前向传播。
+
+        Args:
+            x (Tensor): 查询输入，形状为 (batch, time1, n_state)。
+            xa (Tensor, optional): 键值输入（交叉注意力时使用）。
+            mask (Tensor, optional): 注意力掩码。
+            kv_cache (dict, optional): KV 缓存字典。
+
+        Returns:
+            tuple: (注意力输出, 注意力权重)
+        """
         is_pad_mask = kwargs.get("is_pad_mask", False)
 
         q = self.query(x)
@@ -189,13 +225,18 @@ class MultiHeadAttention(nn.Module):
 
 
 class MultiHeadAttentionSdpa(nn.Module):
+    """基于 PyTorch SDPA (Scaled Dot-Product Attention) 的高效多头注意力。
+
+    利用 PyTorch 原生的 scaled_dot_product_attention 实现，支持 FlashAttention 等优化。
+    """
+
     def __init__(self, n_state: int, n_head: int):
-        """Initialize MultiHeadAttentionSdpa.
-        
-            Args:
-                n_state: TODO.
-                n_head: TODO.
-            """
+        """初始化 SDPA 多头注意力。
+
+        Args:
+            n_state (int): 特征维度。
+            n_head (int): 注意力头数。
+        """
         super().__init__()
         self.n_head = n_head
         self.query = Linear(n_state, n_state)
@@ -211,15 +252,17 @@ class MultiHeadAttentionSdpa(nn.Module):
         kv_cache: Optional[dict] = None,
         **kwargs,
     ):
-        """Forward pass for training.
-        
-            Args:
-                x: TODO.
-                xa: TODO.
-                mask: TODO.
-                kv_cache: TODO.
-                **kwargs: Additional keyword arguments.
-            """
+        """SDPA 多头注意力前向传播。
+
+        Args:
+            x (Tensor): 查询输入。
+            xa (Tensor, optional): 键值输入（交叉注意力时使用）。
+            mask (Tensor, optional): 注意力掩码。
+            kv_cache (dict, optional): KV 缓存字典。
+
+        Returns:
+            tuple: (注意力输出, None)（SDPA 不返回注意力权重）
+        """
         is_pad_mask = kwargs.get("is_pad_mask", False)
 
         q = self.query(x)
@@ -292,15 +335,22 @@ att_type_dict = {
 
 
 class ResidualAttentionBlock(nn.Module):
+    """残差注意力块。
+
+    每个块包含：
+    1. 自注意力层 + 残差连接
+    2. 交叉注意力层（可选）+ 残差连接
+    3. 前馈网络 + 残差连接
+    """
+
     def __init__(self, n_state: int, n_head: int, cross_attention: bool = False, **kwargs):
-        """Initialize ResidualAttentionBlock.
-        
-            Args:
-                n_state: TODO.
-                n_head: TODO.
-                cross_attention: TODO.
-                **kwargs: Additional keyword arguments.
-            """
+        """初始化残差注意力块。
+
+        Args:
+            n_state (int): 特征维度。
+            n_head (int): 注意力头数。
+            cross_attention (bool): 是否包含交叉注意力层。
+        """
         super().__init__()
 
         att_type = kwargs.get("att_type", "default")
@@ -353,17 +403,24 @@ class ResidualAttentionBlock(nn.Module):
 
 
 class AudioEncoder(nn.Module):
+    """音频编码器。
+
+    将 Mel 频谱图通过两层 1D 卷积（stride=2）下采样，然后通过多层残差注意力块编码。
+    使用正弦位置编码。
+
+    结构：Mel -> Conv1d(stride=2) -> Conv1d(stride=2) -> PositionalEncoding -> N x ResidualAttentionBlock -> LayerNorm
+    """
+
     def __init__(self, n_mels: int, n_ctx: int, n_state: int, n_head: int, n_layer: int, **kwargs):
-        """Initialize AudioEncoder.
-        
-            Args:
-                n_mels: TODO.
-                n_ctx: TODO.
-                n_state: TODO.
-                n_head: TODO.
-                n_layer: TODO.
-                **kwargs: Additional keyword arguments.
-            """
+        """初始化音频编码器。
+
+        Args:
+            n_mels (int): Mel 频谱维度。
+            n_ctx (int): 上下文长度（时间步数）。
+            n_state (int): 特征维度。
+            n_head (int): 注意力头数。
+            n_layer (int): 编码器层数。
+        """
         super().__init__()
         self.conv1 = Conv1d(n_mels, n_state, kernel_size=3, stride=2, padding=1)
         self.conv2 = Conv1d(n_state, n_state, kernel_size=3, stride=2, padding=1)
@@ -398,17 +455,23 @@ class AudioEncoder(nn.Module):
 
 
 class TextDecoder(nn.Module):
+    """文本解码器。
+
+    自回归地生成文本 token，每一步都关注音频编码器的输出（交叉注意力）和已生成的 token（自注意力）。
+
+    结构：TokenEmbedding + PositionalEmbedding -> N x ResidualAttentionBlock(with cross-attention) -> LayerNorm -> Linear
+    """
+
     def __init__(self, n_vocab: int, n_ctx: int, n_state: int, n_head: int, n_layer: int, **kwargs):
-        """Initialize TextDecoder.
-        
-            Args:
-                n_vocab: TODO.
-                n_ctx: TODO.
-                n_state: TODO.
-                n_head: TODO.
-                n_layer: TODO.
-                **kwargs: Additional keyword arguments.
-            """
+        """初始化文本解码器。
+
+        Args:
+            n_vocab (int): 词表大小。
+            n_ctx (int): 最大上下文长度。
+            n_state (int): 特征维度。
+            n_head (int): 注意力头数。
+            n_layer (int): 解码器层数。
+        """
         super().__init__()
 
         self.token_embedding = nn.Embedding(n_vocab, n_state)
@@ -481,12 +544,18 @@ class TextDecoder(nn.Module):
 
 
 class Whisper(nn.Module):
+    """Whisper 语音识别模型。
+
+    由音频编码器和文本解码器组成的编码器-解码器架构。
+    支持多语言语音识别和翻译任务。
+    """
+
     def __init__(self, dims: ModelDimensions):
-        """Initialize Whisper.
-        
-            Args:
-                dims: TODO.
-            """
+        """初始化 Whisper 模型。
+
+        Args:
+            dims (ModelDimensions): 模型维度配置。
+        """
         super().__init__()
         self.dims = dims
         self.encoder = AudioEncoder(

@@ -1,3 +1,13 @@
+"""Whisper 工具函数模块。
+
+提供以下工具函数：
+- format_timestamp: 格式化时间戳为 HH:MM:SS.mmm 格式
+- compression_ratio: 计算文本的 gzip 压缩率（用于检测重复文本）
+- exact_div: 精确除法（断言整除）
+- get_writer: 获取输出文件写入器
+- ResultWriter: 输出写入器基类（支持 TXT/VTT/SRT/TSV/JSON 格式）
+"""
+
 import json
 import os
 import re
@@ -32,12 +42,15 @@ else:
 
 
 def exact_div(x, y):
-    """Exact div.
-    
-        Args:
-            x: TODO.
-            y: TODO.
-        """
+    """精确除法，断言 x 能被 y 整除。
+
+    Args:
+        x (int): 被除数。
+        y (int): 除数。
+
+    Returns:
+        int: 整除结果。
+    """
     assert x % y == 0
     return x // y
 
@@ -74,23 +87,31 @@ def optional_float(string):
 
 
 def compression_ratio(text) -> float:
-    """Compression ratio.
-    
-        Args:
-            text: Text tensor or string input.
-        """
+    """计算文本的 gzip 压缩率。
+
+    压缩率越高表示文本重复度越高，常用于检测模型输出的退化（如重复生成）。
+
+    Args:
+        text (str): 输入文本。
+
+    Returns:
+        float: 压缩率 = 原始大小 / 压缩后大小。
+    """
     text_bytes = text.encode("utf-8")
     return len(text_bytes) / len(zlib.compress(text_bytes))
 
 
 def format_timestamp(seconds: float, always_include_hours: bool = False, decimal_marker: str = "."):
-    """Format timestamp.
-    
-        Args:
-            seconds: TODO.
-            always_include_hours: TODO.
-            decimal_marker: TODO.
-        """
+    """将秒数格式化为时间戳字符串。
+
+    Args:
+        seconds (float): 秒数（必须非负）。
+        always_include_hours (bool): 是否始终包含小时部分。
+        decimal_marker (str): 小数点符号（SRT 格式使用逗号）。
+
+    Returns:
+        str: 格式化的时间戳，如 "01:23:45.678"。
+    """
     assert seconds >= 0, "non-negative timestamp expected"
     milliseconds = round(seconds * 1000.0)
 
