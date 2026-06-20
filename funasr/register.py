@@ -2,6 +2,7 @@ import logging
 import inspect
 from dataclasses import dataclass
 import re
+from typing import Any, Callable
 
 
 @dataclass
@@ -46,7 +47,7 @@ class RegisterTables:
                     )
         print("\n")
 
-    def register(self, register_tables_key: str, key: str = None) -> callable:
+    def register(self, register_tables_key: str, key: str = None) -> Callable[..., Any]:
         """Decorator to register a class."""
 
         def decorator(target_class):

@@ -1,0 +1,28 @@
+{
+    "typeCheckingMode": "off",
+    "reportMissingImports": false,
+    "reportMissingModuleSource": false,
+    "reportMissingTypeStubs": false,
+    "reportUnknownMemberType": false,
+    "reportUnknownParameterType": false,
+    "reportUnknownVariableType": false,
+    "reportUnknownArgumentType": false,
+    "reportUntypedFunctionDecorator": false,
+    "reportUntypedClassDecorator": false,
+    "reportUntypedBaseClass": false,
+    "reportOptionalMemberAccess": false,
+    "reportOptionalCall": false,
+    "reportOptionalIterable": false,
+    "reportOptionalSubscript": false,
+    "reportUnboundVariable": false,
+    "reportPrivateUsage": false,
+    "venvPath": ".",
+    "venv": "venv",
+    "extraPaths": [],
+    "pythonVersion": "3.12",
+    "exclude": [
+        "venv",
+        "**/__pycache__",
+        ".mypy_cache"
+    ]
+}
